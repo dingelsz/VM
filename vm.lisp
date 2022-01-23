@@ -1,18 +1,53 @@
 ;; -----------------------------------------------------------------------------
-;; Utils - Binary
+;; Utils - General
 ;; -----------------------------------------------------------------------------
-(defun bit-ref (binary nth)
+(defun nif (predicate)
+  "An if statement that returns 1 for true and 0 for false (number-if)"
+  (if predicate 1 0))
+
+;; -----------------------------------------------------------------------------
+;; Utils - Binary
+;; We represent binary from left to right
+;; -----------------------------------------------------------------------------
+(defun bin-ref (bits n)
   "Returns the nth bit from a binary number"
-  )
+  (nth n bits))
 
-(defun bit-right (number offset)
-  "Returns offset binary digets from the right of the number")
+(defun bin-seq (bits start end)
+  "Returns subsequence binary digets starting at digit start and ending at digit end"
+  (subseq bits start end))
 
-(defun bit-left (number offset)
-  "Returns offset binary digets from the left of the number")
+(defun bin-add (x y &optional (carry 0))
+  "Adds two binary numbers together"
+  ;; Two empty numbers
+  (cond ((and (null x) (null y)) (list carry))
+	((null x) y)
+	((null y) x)
+	(T (cons (mod (+ (first x) (first y) carry) 2)
+		 (bin-add (rest x) (rest y) (nif (>= (+ (first x) (first y) carry) 2)))))))
 
-(defun bit-seq (number start end)
-  "Returns subsequence binary digets starting at digit start and ending at digit end")
+(defun bin-to-int (bit)
+  "Convert a binary number to an integer"
+  (if (null bit) 0
+      (+ (first bit) (* 2 (bin-to-int (rest bit))))))
+
+(defun int-to-bin (num)
+  "Converts an integer to a binary number"
+  (if (zerop num) '()
+      (cons (mod num 2) (num-to-bit (floor num 2)))))
+
+(defun bin= (x y)
+  (= (bin-to-int x) (bin-to-int y)))
+
+(defun bin-zerop (num)
+  (zerop (bin-to-int num)))
+(defun bin-and (x y)
+  (cond ((and (null x) (null y)) '())
+	((null x) y)
+	((null y) x)
+	(T (cons (mod (+ (first x) (first y)) 2) (bin-and (rest x) (rest y))))))
+
+
 
 ;; -----------------------------------------------------------------------------
 ;; Utils - Read/Write
@@ -28,48 +63,67 @@
 ;; -----------------------------------------------------------------------------
 ;; Memory
 ;; -----------------------------------------------------------------------------
-(defparameter MEMORY (make-hash-table))
+(defparameter *WORD-SIZE* 16)
+(defparameter *WORD* (loop repeat *WORD-SIZE* collect 0))
+(defparameter *WORD-COUNT* (expt 2 16))
+(defparameter *MEMORY* (loop
+			 repeat *WORD-COUNT*
+			 collect *WORD*))
+
+(defun make-word () (loop repeat *WORD-SIZE* collect 0))
 
 (defun memory-read (index)
   "Reads a value from memory at the given index"
-  (vm-read MEMORY index))
+  (vm-read *MEMORY* index))
 
 (defun memory-write (index value)
   "Writes a value into memory at the given index"
-  (vm-write MEMORY index value))
+  (vm-write *MEMORY* index value))
 
 ;; -----------------------------------------------------------------------------
 ;; Registers
 ;; -----------------------------------------------------------------------------
 (defparameter REGISTERS (make-hash-table))
-(setf (gethash 'R0 REGISTERS) 0)
-(setf (gethash 'R1 REGISTERS) 0)
-(setf (gethash 'R2 REGISTERS) 0)
-(setf (gethash 'R3 REGISTERS) 0)
-(setf (gethash 'R4 REGISTERS) 0)
-(setf (gethash 'R5 REGISTERS) 0)
-(setf (gethash 'R6 REGISTERS) 0)
-(setf (gethash 'R7 REGISTERS) 0)
-(setf (gethash 'RPC REGISTERS) 0)
-(setf (gethash 'RCND REGISTERS) 0)
-(setf (gethash 'RCNT REGISTERS) 0)
+(setf (gethash 'R0 REGISTERS) *WORD*)
+(setf (gethash 'R1 REGISTERS) *WORD*)
+(setf (gethash 'R2 REGISTERS) *WORD*)
+(setf (gethash 'R3 REGISTERS) *WORD*)
+(setf (gethash 'R4 REGISTERS) *WORD*)
+(setf (gethash 'R5 REGISTERS) *WORD*)
+(setf (gethash 'R6 REGISTERS) *WORD*)
+(setf (gethash 'R7 REGISTERS) *WORD*)
+(setf (gethash 'RPC REGISTERS) *WORD*)
+(setf (gethash 'RCND REGISTERS) *WORD*)
+(setf (gethash 'RCNT REGISTERS) *WORD*)
 
+(defun register-lookup (key)
+  (if (symbolp key) key
+      (cond ((bin= key (int-to-bin 0)) 'R0)
+	    ((bin= key (int-to-bin 1)) 'R1)
+	    ((bin= key (int-to-bin 2)) 'R2)
+	    ((bin= key (int-to-bin 3)) 'R3)
+	    ((bin= key (int-to-bin 4)) 'R5)
+	    ((bin= key (int-to-bin 5)) 'R6)
+	    ((bin= key (int-to-bin 6)) 'R7)
+	    ((bin= key (int-to-bin 7)) 'RPC)
+	    ((bin= key (int-to-bin 8)) 'RCND)
+	    ((bin= key (int-to-bin 9)) 'RCNT))))
 
 (defun register-read (R)
-  (vm-read REGISTERS R))
+  (vm-read REGISTERS (register-lookup R)))
 
 (defun register-write (R value)
-  (vm-write REGISTERS R value))
+  (vm-write REGISTERS (register-lookup R) value))
 
 (defun register-inc (R value)
-  (register-write R (+ (register-read R)
-		       value)))
+  (register-write (register-lookup R) (bin-add (register-read (register-lookup R))
+					 value)))
 
 (defun update-conditional-register (x)
   (register-write 'RCND (cond
-			  ((< x 0) #b001)
-			  ((= x 0) #b010)
-			  ((> x 0) #b100))))
+			  ((< x 0) '(0 0 1))
+			  ((= x 0) '(0 1 0))
+			  ((> x 0) '(1 0 0)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Instructions
@@ -81,45 +135,29 @@
 ;; 11		: Space
 ;; 12-16	: Param 3
 ;; ---------------------------------------------------------------------------
-(defstruct instruction "An instruction"
-	   (binary 0)
-	   (op 0)
-	   (arg1 0)
-	   (arg2 0)
-	   (misc 0)
-	   (param3 0))
-
-(defun make-instruction-from-int (x)
-  "Makes a new instruction from an integer"
-  (let ((opcode (bit-seq 0 4))
-	(arg1   (bit-seq 4 7))
-	(arg2   (bit-seq 7 10))
-	(misc   (bit-ref 11))
-	(param3 (bit-sub 12 16)))
-    (make-instruction :binary x :opcode opcode :param1 arg1 :param2 arg2 :misc misc :param3 param3)))
 
 ;; -----------------------------------------------------------------------------
-;; Instructions - Implementation
-;; ---------------------------------------------------------------------------
-;; - Control Flow
+;; Instructions - Implementation - Control Flow
 ;; ---------------------------------------------------------------------------
 (defun op-branch (instruction)
-  (let* ((offset (bit-seq instruction 0 9))
-	(flags (bit-seq instruction 9 11))
-	(should-branch (= #x000 (bit-and flags (register-read 'RCND)))))
+  (let* ((offset (bin-seq instruction 0 9))
+	(flags (bin-seq instruction 9 11))
+	(should-branch (bin= '(0 0 0) (bin-and flags (register-read 'RCND)))))
     (when should-branch (register-inc 'RPC offset))))
 
 (defun op-jump (instruction)
-    (let* ((register (arg2 instruction))
+  (let* ((arg2 (bin-seq instruction 6 9))
 	 (base (register-read 'RPC))
-	 (address (register-read register)))
+	 (address (register-read arg2)))
       (register-write 'RPC address)))
 
 (defun op-jump-to-subroutine (instruction)
   (register-write 'R7 (register-read 'RPC))
-  (let ((offset (bit-seq instruction 0 10)))
-    (register-write 'RPC (if (zerop (bit-ref instruction 11))
-			     (register-read (arg2 instruction))
+  (let ((misc (bin-ref instruction 11))
+	(offset (bin-seq instruction 0 10))
+	(arg2 (bin-seq instruction 6 9)))
+    (register-write 'RPC (if (zerop misc)
+			     (register-read arg2)
 			     (+ (register-read 'RPC) offset)))))
 
 ;; ---------------------------------------------------------------------------
@@ -129,78 +167,98 @@
   ;; Store the sum of two numbers in register (arg1). The sum is either
   ;; two numbers in registers (arg2 and arg3) or the sum of whats in
   ;; register (arg2) and the number arg3.
-  (register-write (arg1 instruction)
-		  (+ (register-read (arg2 instruction))
-		     (if (zerop (misc instruction))
-			 (register-read (arg3 instruction))
-			 (arg3 instruction))))
-  (update-conditional-register (register-read (arg1 insruction))))
+  (let ((arg1 (bin-seq instruction 9 12))
+	(arg2 (bin-seq instruction 6 9))
+	(misc (bin-seq instruction 3 6))
+	(arg3 (bin-seq instruction 0 3)))
+    (register-write arg1
+		    (bin-add (register-read arg2)
+		       (if (bin-zerop misc)
+			   (register-read arg3)
+			   arg3)))
+;;    (update-conditional-register (register-read arg1))
+    ))
 
 (defun op-and (instruction)
-  (register-write (arg1 instruction)
-		  (bit-and (register-read (arg2 instruction))
-			   (if (zerop (misc instruction))
-			       (register-read (arg3 instruction))
-			       (arg3 instruction))))
-  (update-conditional-register (register-read (arg1 insruction))))
+  (let ((arg1 (bin-seq instruction 9 12))
+	(arg2 (bin-seq instruction 6 9))
+	(arg3 (bin-seq instruction 0 5))
+	(misc (bin-ref instruction 5)))
+    (register-write arg1
+		    (bin-and (register-read arg2)
+			     (if (zerop misc)
+				 (register-read arg3)
+				 arg3)))
+    (update-conditional-register (register-read arg1))))
 
 (defun op-not (instruction)
-  (register-write (arg1 instruction) (bit-not (arg2 instruction)))
-  (update-conditional-register (register-read (arg1 insruction))))
+  (let ((arg1 (bin-seq instruction 9 12))
+	(arg2 (bin-seq instruction 6 9)))
+    (register-write arg1 (bit-not arg2))
+    (update-conditional-register (register-read (arg1 insruction)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Instructions - Implementation - Memory -> Registers
 ;; ---------------------------------------------------------------------------
 (defun op-load (instruction)
   (let* ((base (register-read 'RPC))
-	 (offset (bit-right (binary instruction) 9))
+	 (arg1 (bin-seq instruction 9 12))
+	 (offset (bin-seq (binary instruction) 0 9))
 	 (address (+ base offset)))
-    (register-write (arg1 instruction) (memory-read address)))
-  (update-conditional-register (register-read (arg1 insruction))))
+    (register-write arg1 (memory-read address))
+    (update-conditional-register (register-read arg1))))
 
 (defun op-load-base (instruction)
-  (let* ((base (register-read (arg2 instruction)))
-	 (offset (bit-right (binary instruction) 6))
+  (let* ((arg1 (bin-seq instruction 9 12))
+	 (arg2 (bin-seq instruction 6 9))
+	 (base (register-read arg2))
+	 (offset (bin-seq (binary instruction) 0 6))
 	 (address (+ base offset)))
-    (register-write (arg1 instruction) (memory-read address)))
-  (update-conditional-register (register-read (arg1 insruction))))
+    (register-write arg1 (memory-read address))
+    (update-conditional-register (register-read arg1))))
 
 (defun op-load-indirect (instruction)
-  (let* ((base (register-read 'RPC))
-	 (offset (bit-right (binary instruction) 9))
+  (let* ((arg1 (bin-seq instruction 9 12))
+	 (base (register-read 'RPC))
+	 (offset (bin-seq (binary instruction) 0 9))
 	 (address (memory-read (+ base offset))))
-    (register-write (arg1 instruction) (memory-read address)))
-  (update-conditional-register (register-read (arg1 insruction))))
+    (register-write arg1 (memory-read address))
+    (update-conditional-register (register-read arg1))))
 
 (defun op-load-effective-address (instruction)
-  (let* ((base (register-read 'RPC))
-	 (offset (bit-right (binary instruction) 9))
+  (let* ((arg1 (bin-seq instruction 9 12))
+	 (base (register-read 'RPC))
+	 (offset (bin-seq (binary instruction) 0 9))
 	 (address (+ base (memory-read offset))))
-    (register-write (arg1 instruction) address))
-  (update-conditional-register (register-read (arg1 insruction))))
+    (register-write arg1 address)
+    (update-conditional-register (register-read arg1))))
 
 ;; ---------------------------------------------------------------------------
 ;; Instructions - Implementation - Registers -> Memory
 ;; ---------------------------------------------------------------------------
 (defun op-store (instruction)
-  (let* ((base (register-read 'RPC))
-	 (offset (bit-right (binary instruction) 9))
+  (let* ((arg1 (bin-seq instruction 9 12))
+	 (base (register-read 'RPC))
+	 (offset (bin-seq (binary instruction) 0 9))
 	 (address (+ base offset))
-	 (val (register-read (arg1 instruction))))
+	 (val (register-read arg1)))
     (memory-write address (register-read val))))
 
 (defun op-store-base (instruction)
-  (let* ((base (register-read (arg2 instruction)))
-	 (offset (bit-right (binary instruction) 6))
+  (let* ((arg1 (bin-seq instruction 9 12))
+	 (arg2 (bin-seq instruction 6 9))
+	 (base (register-read arg2))
+	 (offset (bin-seq (binary instruction) 0 6))
 	 (address (memory-read (+ base offset)))
-	 (val (register-read (arg1 instruction))))
+	 (val (register-read arg1)))
     (memory-write address (register-read val))))
 
 (defun op-store-indirect (instruction)
-  (let* ((base (register-read 'RPC))
-	 (offset (bit-right (binary instruction) 9))
+  (let* ((arg1 (bin-seq instruction 9 12))
+	 (base (register-read 'RPC))
+	 (offset (bin-seq (binary instruction) 0 9))
 	 (address (memory-read (+ base offset)))
-	 (val (register-read (arg1 instruction))))
+	 (val (register-read arg1)))
     (memory-write address (register-read val))))
 
 ;; -----------------------------------------------------------------------------
@@ -244,7 +302,7 @@
 (setf (gethash #x7 TRAP-TABLE) trap-output-integer)
 
 (defun op-trap (instruction)
-  (let ((trap-idx (bit-seq instruction 0 8)))
+  (let ((trap-idx (bin-seq instruction 0 8)))
     (funcall (gethash trap-idx TRAP-TABLE))))
 
 (defun op-return-from-interrupt (instruction))
